@@ -1,0 +1,198 @@
+library(tidyverse)
+
+setwd("/Volumes/Macintosh HD/Users/ke/Desktop/OneDrive - Yale University/Postdoc/spatialtemporal RSV/RSV_peaking_time_age/")
+
+data <- readRDS("cdc_data_new_age_group_group5.rds") #%>% select(State, wk, Season, N, AGE_GROUP, population)
+
+palette_colors <- c("#2ca25f", "#fec44f", "#fa9fb5", "#8da0cb","midnightblue")
+
+time_series_by_regions <- data %>% 
+  filter(State != "North Carolina") %>% 
+  mutate(Region = ifelse(State %in% c("New York", "Connecticut", "Maryland"), "Northeast Region (NY, CT, MD)", 
+                        ifelse(State %in% c("Georgia", "Tennessee"), "Southeast Region (GA, TN)", 
+                               ifelse(State %in% c("Minnesota", "Michigan"), "Midwest Region (MN, MI)", "Southwest/West Region (NM, CO, UT, CA, OR)")))) %>% 
+  mutate(Region = factor(Region, levels = c("Southeast Region (GA, TN)", 
+                                            "Northeast Region (NY, CT, MD)", 
+                                            "Midwest Region (MN, MI)", 
+                                            "Southwest/West Region (NM, CO, UT, CA, OR)"))) %>% 
+  #filter(AGE_GROUP %in% c("under 1", "1-4", "5-17" , "18-64","above 65")) %>% 
+  group_by(Date, AGE_GROUP, Region) %>% 
+  summarise(N = sum(N)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = Date, y = N, color = AGE_GROUP)) + 
+  geom_vline(aes(xintercept = as.Date("2019-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2020-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2021-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2022-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2023-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2024-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_line() +
+  #geom_bar(stat="identity", position=position_dodge()) +
+  theme_minimal() +
+  theme(legend.key = element_rect(fill = "white", colour = "white"), legend.position = "top") +
+  theme(panel.border = element_blank(), axis.line = element_line(colour = "black")) + 
+  theme(panel.grid.minor  = element_blank()) + 
+  labs(title = "",
+       x = "Year",
+       y = "# of Hospitalizations", 
+       color = "Age group") +
+  theme(axis.text.x = element_text(color="black",
+                                   size=15, angle=0,vjust = 0.5),
+        axis.text.y = element_text(color="black",
+                                   size=15, angle=0),
+        text = element_text(size = 15), 
+        legend.title = element_text(size = 12),  # Change legend title size
+        legend.text = element_text(size = 12))  +
+  theme(plot.title = element_text(hjust = 0.5))  + 
+  facet_wrap(~Region, scales = "free", nrow = 2) + 
+  scale_color_manual(values = palette_colors) + 
+  scale_x_continuous(breaks = as.Date(paste0(2019:2024, "-01-01")), labels = as.character(seq(2019, 2024, by = 1)))  # Custom x-ticks
+  
+time_series_by_regions
+
+  
+time_series_by_states <- data %>% 
+  filter(State != "North Carolina") %>% 
+   #filter(AGE_GROUP %in% c("under 1", "1-4", "5-17" , "18-64","above 65")) %>% 
+    ggplot(aes(x = Date, y = N, color = AGE_GROUP)) + 
+    geom_vline(aes(xintercept = as.Date("2019-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+    geom_vline(aes(xintercept = as.Date("2020-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+    geom_vline(aes(xintercept = as.Date("2021-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+    geom_vline(aes(xintercept = as.Date("2022-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+    geom_vline(aes(xintercept = as.Date("2023-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+    geom_vline(aes(xintercept = as.Date("2024-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+    geom_line() +
+    theme_minimal() +
+    theme(legend.key = element_rect(fill = "white", colour = "white"), legend.position = "top") +
+    theme(panel.border = element_blank(), axis.line = element_line(colour = "black")) + 
+    theme(panel.grid.minor  = element_blank()) + 
+    labs(title = "",
+         x = "Year",
+         y = "# of Hospitalizations", 
+         color = "Age group") +
+    theme(axis.text.x = element_text(color="black",
+                                     size=12, angle=0,vjust = 0.5),
+          axis.text.y = element_text(color="black",
+                                     size=12, angle=0),
+          text = element_text(size = 12))  +
+    theme(plot.title = element_text(hjust = 0.5))  + 
+    facet_wrap(~State, scales = "free", nrow = 4) + 
+    scale_color_manual(values = palette_colors) + 
+    scale_x_continuous(breaks = as.Date(paste0(2019:2024, "-01-01")), labels = as.character(seq(2019, 2024, by = 1)))  # Custom x-ticks
+  
+time_series_by_states
+
+
+
+
+  df1 <- data %>% 
+  filter(State != "North Carolina") %>% 
+  mutate(Region = ifelse(State %in% c("New York", "Connecticut", "Maryland"), "Northeast Region (NY, CT, MD)", 
+                         ifelse(State %in% c("Georgia", "Tennessee"), "Southeast Region (GA, TN)", 
+                                ifelse(State %in% c("Minnesota", "Michigan"), "Midwest Region (MN, MI)", "Southwest/West Region (NM, CO, UT, CA, OR)")))) %>% 
+  mutate(Region = factor(Region, levels = c("Southeast Region (GA, TN)", 
+                                            "Northeast Region (NY, CT, MD)", 
+                                            "Midwest Region (MN, MI)", 
+                                            "Southwest/West Region (NM, CO, UT, CA, OR)"))) %>% 
+  #filter(AGE_GROUP %in% c("under 1", "1-4", "5-17" , "18-64","above 65")) %>% 
+  group_by(AGE_GROUP, Region, Season) %>% 
+  summarise(pop = sum(N))
+  
+  df2 <- data %>% 
+    filter(State != "North Carolina") %>% 
+    mutate(Region = ifelse(State %in% c("New York", "Connecticut", "Maryland"), "Northeast Region (NY, CT, MD)", 
+                           ifelse(State %in% c("Georgia", "Tennessee"), "Southeast Region (GA, TN)", 
+                                  ifelse(State %in% c("Minnesota", "Michigan"), "Midwest Region (MN, MI)", "Southwest/West Region (NM, CO, UT, CA, OR)")))) %>% 
+    mutate(Region = factor(Region, levels = c("Southeast Region (GA, TN)", 
+                                              "Northeast Region (NY, CT, MD)", 
+                                              "Midwest Region (MN, MI)", 
+                                              "Southwest/West Region (NM, CO, UT, CA, OR)"))) %>% 
+    #filter(AGE_GROUP %in% c("under 1", "1-4", "5-17" , "18-64","above 65")) %>% 
+    group_by(Region, Season) %>% 
+    summarise(pop = sum(N))
+  
+  df3 <- merge(df1, 
+               df2, 
+               by = c("Region", "Season"))
+  
+  df4 <- df3 %>% 
+    mutate(fraction = pop.x / pop.y * 100) %>% 
+    group_by(Region, AGE_GROUP) %>% 
+    summarise(value = median(fraction)) %>% 
+    ungroup() %>% 
+    mutate(M = ifelse(AGE_GROUP %in% c("under 1", "1-4", "above 65"), 1, 2)) %>% 
+    group_by(Region, M) %>% 
+    summarise(value = sum(value))
+    
+  
+ 
+  
+sum_by_region <- data %>% 
+  filter(State != "North Carolina") %>% 
+  mutate(Region = ifelse(State %in% c("New York", "Connecticut", "Maryland"), "Northeast Region (NY, CT, MD)", 
+                         ifelse(State %in% c("Georgia", "Tennessee"), "Southeast Region (GA, TN)", 
+                                ifelse(State %in% c("Minnesota", "Michigan"), "Midwest Region (MN, MI)", "Southwest/West Region (NM, CO, UT, CA, OR)")))) %>% 
+  mutate(Region = factor(Region, levels = c("Southeast Region (GA, TN)", 
+                                            "Northeast Region (NY, CT, MD)", 
+                                            "Midwest Region (MN, MI)", 
+                                            "Southwest/West Region (NM, CO, UT, CA, OR)"))) %>% 
+  #filter(AGE_GROUP %in% c("under 1", "1-4", "5-17" , "18-64","above 65")) %>% 
+  group_by(Date, AGE_GROUP, Region) %>% 
+  summarise(N = sum(N)) %>% 
+  ungroup() %>% 
+  group_by(Date, Region) %>% 
+  summarise(total = sum(N))
+
+sum_by_region_age <- data %>% 
+  filter(State != "North Carolina") %>% 
+  mutate(Region = ifelse(State %in% c("New York", "Connecticut", "Maryland"), "Northeast Region (NY, CT, MD)", 
+                         ifelse(State %in% c("Georgia", "Tennessee"), "Southeast Region (GA, TN)", 
+                                ifelse(State %in% c("Minnesota", "Michigan"), "Midwest Region (MN, MI)", "Southwest/West Region (NM, CO, UT, CA, OR)")))) %>% 
+  mutate(Region = factor(Region, levels = c("Southeast Region (GA, TN)", 
+                                            "Northeast Region (NY, CT, MD)", 
+                                            "Midwest Region (MN, MI)", 
+                                            "Southwest/West Region (NM, CO, UT, CA, OR)"))) %>% 
+  #filter(AGE_GROUP %in% c("under 1", "1-4", "5-17" , "18-64","above 65")) %>% 
+  group_by(Date, AGE_GROUP, Region) %>% 
+  summarise(N = sum(N)) %>% 
+  ungroup()
+
+
+df6 <- merge(sum_by_region_age, 
+             sum_by_region, 
+             by = c("Date", "Region")) 
+
+df7 <- df6 %>% 
+  mutate(prop = ifelse(total == 0, 0, N/total))
+
+
+ggplot(data=df7, aes(x=Date, y=N, fill = AGE_GROUP, color = AGE_GROUP)) +
+  geom_density_2d(stat="identity") + 
+  theme_minimal()  + 
+  geom_vline(aes(xintercept = as.Date("2019-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2020-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2021-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2022-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2023-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = as.Date("2024-01-01")), linewidth = .4, color = "black", lty = "dashed") +
+  geom_line() +
+  theme(legend.key = element_rect(fill = "white", colour = "white"), legend.position = "top") +
+  theme(panel.border = element_blank(), axis.line = element_line(colour = "black")) + 
+  theme(panel.grid.minor  = element_blank()) + 
+  labs(title = "",
+       x = "Year",
+       y = "# of Hospitalizations", 
+       color = "Age group") +
+  theme(axis.text.x = element_text(color="black",
+                                   size=15, angle=0,vjust = 0.5),
+        axis.text.y = element_text(color="black",
+                                   size=15, angle=0),
+        text = element_text(size = 15), 
+        legend.title = element_text(size = 12),  # Change legend title size
+        legend.text = element_text(size = 12))  +
+  theme(plot.title = element_text(hjust = 0.5))  + 
+  facet_wrap(~Region, scales = "free", nrow = 2) + 
+  scale_color_manual(values = palette_colors) + 
+  scale_x_continuous(breaks = as.Date(paste0(2019:2024, "-01-01")), labels = as.character(seq(2019, 2024, by = 1)))  # Custom x-ticks
+
+
