@@ -1,0 +1,62 @@
+# Load necessary libraries
+library(sf)
+library(ggplot2)
+library(dplyr)
+
+# Load the US counties shapefile using the tigris package
+# Alternatively, you could use an existing shapefile for NY or an online source
+# install.packages("tigris") # Uncomment to install
+library(tigris)
+
+# Set tigris options for loading data
+options(tigris_use_cache = TRUE)
+options(tigris_class = "sf")
+
+# Load New York state counties
+ny_counties <- counties(state = "NY", cb = TRUE)
+
+
+#highlighted_counties <- unique(ny_counties$NAME)
+
+# Define the counties you want to highlight
+highlighted_counties <- c("Albany",
+                          "Columbia",
+                          "Genesee",
+                          "Greene",
+                          "Livingston",
+                          "Monroe",
+                          "Montgomery",
+                          "Ontario",
+                          "Orleans",
+                          "Rensselaer",
+                          "Saratoga",
+                          "Schenectady",
+                          "Schoharie",
+                          "Wayne",
+                          "Yates")
+
+
+# # Define the counties you want to highlight
+# highlighted_counties <- c(
+#   "Alameda",
+#   "Contra Costa",
+#   "San Francisco")  # example counties
+
+# Create a new variable to indicate highlighted counties
+ny_counties <- ny_counties %>%
+  mutate(highlight = ifelse(NAME %in% highlighted_counties, "Highlighted", "Normal"))
+
+# Plot the map
+NY_map <- ggplot(data = ny_counties) +
+  geom_sf(aes(fill = highlight), color = "black") +  # Fill by highlight status
+  scale_fill_manual(values = c("Highlighted" = "#737373", "Normal" = "#fff7f3")) +  # Set colors
+  theme_minimal() +
+  #labs(title = "3 Counties in CA participating in the RSV-NET") +
+  labs(title = "15 Counties in NY participating in the RSV-NET") +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 10) , # Center the title
+    axis.title = element_text(size = 10),  # Axis label size
+    axis.text = element_text(size = 10), 
+  ) +
+  theme(legend.position = "none")  # Optional: remove legend if not needed
+NY_map
