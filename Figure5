@@ -1,0 +1,695 @@
+library(surveillance)
+library(socialmixr)
+library(tidyverse)
+library(tigris)
+library(sf)
+library(zctaCrosswalk)
+library(spatstat)
+library(hhh4contacts)
+library(zipcodeR)
+library(tidyverse)
+library(sf)
+library(ggplot2)
+library(dplyr)
+library(tigris)
+library(viridisLite)
+library(zctaCrosswalk)
+library(zipcodeR)
+library(spatstat)
+library(spdep)
+library(arrow)
+library(usmap)
+library(scales)
+library(duckdb)
+library(plotly)
+library(lubridate)
+
+#load(url("https://github.com/cmmid/hhh4-workshop/blob/main/tutorial2_multivariate/data/noroBE.rda?raw=true"))
+
+setwd("/Volumes/Macintosh HD/Users/ke/Desktop/OneDrive - Yale University/Postdoc/spatialtemporal RSV/RSV_peaking_time_age/")
+
+
+observation_population <- readRDS("cdc_data_new_age_group_group5.rds")
+
+my_states <- unique(observation_population$State)
+my_states <- my_states[-6]
+Nstates <- length(my_states)
+# Create a data frame with state names and abbreviations
+states_df <- data.frame(name = state.name, abbreviation = state.abb)
+
+# Filter to get abbreviations for the specified states
+abbreviations <- states_df$abbreviation[states_df$name %in% my_states]
+abbreviations <- rev(abbreviations)
+
+g1_own <- c()
+g2_own <- c()
+g3_own <- c()
+g4_own <- c()
+g5_own <- c()
+
+g1_other <- c()
+g2_other <- c()
+g3_other <- c()
+g4_other <- c()
+g5_other <- c()
+
+
+g1_end <- c()
+g2_end <- c()
+g3_end <- c()
+g4_end <- c()
+g5_end <- c()
+
+
+power_lag <- list()
+
+for(rr in 1:Nstates){
+
+observed_data <- observation_population %>% 
+  filter(State == my_states[rr]) %>%  # change state
+  group_by(Date, AGE_GROUP) %>% 
+  summarise(N = sum(N)) %>% 
+  ungroup() %>% 
+  pivot_wider(
+    names_from = AGE_GROUP,
+    values_from = N,
+    values_fill = 0) %>% 
+  select(-Date)
+
+
+observed_data <- as.matrix(observed_data)
+
+colnames(observed_data) <- factor(colnames(observed_data),
+                                  levels = unique(colnames(observed_data)))
+
+population_fraction <- readRDS(paste0(abbreviations[rr],"_population.rds")) %>% 
+  mutate(Age_Group = ifelse(Age_Group == "0-<1 year", "under 1", 
+                            ifelse(Age_Group == "1-4 years", "1-4", 
+                                   ifelse(Age_Group == "5-17 years", "5-17", 
+                                          ifelse(Age_Group %in% c("18-49 years", "50-64 years"), "18-64", "above 65"))))) %>% 
+  group_by(Age_Group) %>% 
+  summarise(population = sum(population)) %>% 
+  mutate(Age_Group = factor(Age_Group, levels = c("under 1", "1-4", "5-17", "18-64", "above 65"))) %>% 
+  arrange(Age_Group)
+
+population_fraction <- matrix(rep(population_fraction$population, each = 312), nrow = 312, ncol =5) 
+
+reporting_fraction <- readRDS("hhh4data_NY/NY_reporting_fraction_G5.rds")
+
+
+colnames(population_fraction) <- colnames(observed_data)
+colnames(reporting_fraction) <- colnames(observed_data)
+
+ 
+
+
+source("contact_matrix_aggregation.R")
+
+ 
+
+age_group <- colnames(observed_data)
+neg_mat <- matrix(1, nrow = length(age_group), ncol = length(age_group))
+
+
+ny_data_all <- sts(
+  observed = observed_data, 
+  start = c(2018, 27), 
+  frequency = 52, 
+  epoch = seq(1:dim(observed_data)[1]), 
+  populationFrac = population_fraction,
+  neighbourhood = neg_mat
+)
+
+
+
+### setup time variables and indicators for group/district-specific effects
+DATAt <- list(t = epoch(ny_data_all) - 1,
+              christmas = 1*(epochInYear(ny_data_all) %in% c(26)), 
+              thanks_giving = 1*(epochInYear(ny_data_all) %in% c(22))
+)
+
+
+AGE_GROUP <- factor(age_group, 
+                    levels = age_group)
+
+
+## setup a model matrix with group indicators 
+MMG <- sapply(AGE_GROUP, function (g) {
+  index <- which( sub("^[^_]+_(.*)", "\\1", stratum(ny_data_all)) == g)
+  res <- col(ny_data_all)
+  res[] <- res %in% index
+  res
+}, simplify = FALSE, USE.NAMES = TRUE)
+#str(MMG)
+names(MMG) <- AGE_GROUP
+
+
+
+## setup model matrix of group-specific seasonal terms
+MMgS <- with(c(MMG, DATAt), unlist(lapply(
+  X = as.character(AGE_GROUP),
+  FUN = function (g) {
+    gIndicator <- get(g)
+    res <- list(gIndicator * sin(2 * pi * t/52),
+                gIndicator * cos(2 * pi * t/52))
+    names(res) <- c(paste0(c("sin", "cos"), "(2 * pi * t/52).", g))
+    res
+  }), recursive = FALSE, use.names = TRUE))
+ 
+
+GROUPS <-  as.character(AGE_GROUP)
+
+MMgVacation <- with(c(MMG, DATAt), unlist(lapply(
+  X = as.character(AGE_GROUP)[3],
+  FUN = function (g) {
+    gIndicator <- get(g)
+    res <- list(gIndicator * 1*(!epochInYear(ny_data_all) %in% c(51,52,1,2,3,4,5,6)))
+    names(res) <- c(paste0("school_holiday.", g))
+    res
+  }), recursive = FALSE, use.names = TRUE))
+
+
+MMR <- list()
+MMR$NY <- round(observed_data)
+names(MMR) <- abbreviations[rr]
+
+### specify the basic endemic model
+
+
+## endemic formula: ~
+
+qGROUPS <- paste0("`", GROUPS, "`")
+
+FGRXgS <- reformulate(c(qGROUPS[-1], "christmas", "thanks_giving", "t",
+                      paste0("`", names(MMgVacation), "`")),
+                      
+                      #paste0("`", names(MMgS), "`")),
+                      intercept = TRUE)
+
+
+my_family <-  factor(sub("^[^_]+_(.*)", "\\1", stratum(ny_data_all)), 
+                     levels = age_group)
+
+
+
+contrl0 <- list(
+  end = list(f = FGRXgS,
+             offset = log(reporting_fraction * population(ny_data_all))),
+  family = my_family, 
+  data = c(MMG, DATAt, MMgS, MMgVacation))
+
+
+ma0 <- hhh4(ny_data_all, contrl0)
+
+AIC(ma0)
+
+# plot(ma0, unit = 1:5, par.settings = list(mfcol = c(5,1)),
+#      legend.args = list(cex = .8,           # Adjust legend size
+#                         legend = c("from other age groups",
+#                                    "within age group",
+#                                    "endemic"))) # look at all units
+
+
+summary(ma0, idx2Exp = TRUE, amplitudeShift = TRUE, maxEV = TRUE)
+
+FGRpop <- reformulate(c(qGROUPS[-1], 
+                        paste0("`", names(MMgS), "`")), 
+                        #paste0("`", names(MMgVacation), "`")),
+                      intercept = TRUE)
+
+my_family <-  factor(sub("^[^_]+_(.*)", "\\1", stratum(ny_data_all)), 
+                     levels = AGE_GROUP)
+
+levels(my_family)[3:5] <- paste0(levels(my_family)[3:5], collapse = " & ")
+levels(my_family)
+
+
+contrl1 <- list(
+  end = list(f = FGRXgS,
+             offset = log(reporting_fraction * population(ny_data_all))),
+  
+  ne = list(
+    f = FGRpop,
+    offset = log(reporting_fraction * population(ny_data_all)),
+    weights = neighbourhood(ny_data_all) * Cgrouped,
+    normalize = T),
+  
+  family = my_family,  # share overdispersion parameters
+  data = c(MMG, DATAt, MMgS, MMR, MMgVacation),
+  optimizer = list(stop = list(tol=1e-8, niter=100000),
+                   regression = list(method="nlminb"),
+                   variance = list(method="nlminb")))
+
+ma1 <- hhh4(ny_data_all, contrl1)
+
+ 
+contrl2 <- list(
+  end = list(f = FGRXgS,
+             offset = log(reporting_fraction * population(ny_data_all))),
+  
+  ne = list(
+    f = FGRpop,
+    offset = log(reporting_fraction * population(ny_data_all)),
+    weights = neighbourhood(ny_data_all) * Cgrouped,
+    normalize = T), # row-normalization
+  
+  family = "NegBin1",  # share overdispersion parameters
+  data = c(MMG, DATAt, MMgS, MMR, MMgVacation),
+  optimizer = list(stop = list(tol=1e-8, niter=100000),
+                   regression = list(method="nlminb"),
+                   variance = list(method="nlminb")))
+
+
+ma2 <- hhh4(ny_data_all, contrl2)
+
+df1 <- AIC(ma1, ma2)
+
+ma_optim <- ifelse(is.na(df1$AIC[1]), "ma2",
+                   ifelse(is.na(df1$AIC[2]), "ma1", 
+                          ifelse( (df1$AIC[1] - df1$AIC[2]) > 10, "ma1",  "ma2")))
+  
+
+
+# summary(ma1, idx2Exp = TRUE, amplitudeShift = TRUE, maxEV = TRUE, reparamPsi = TRUE) # model estimates of the coefficients
+
+ 
+# ma3 <- fitC(get(ma_optim), Cgrouped, normalize = TRUE, truncate = TRUE)
+
+
+# df <- AIC(get(ma_optim), ma3)
+
+# test <- summary(ma3, idx2Exp = TRUE, amplitudeShift = TRUE, maxEV = TRUE, reparamPsi = TRUE)
+
+
+# min_aic_row <- ifelse((df$AIC[1] - df$AIC[2]) > 5 & test$power[1] <=3, "ma3",  "ma_optim")
+
+# saveRDS(get(min_aic_row), file = paste0("best_fit_",min_aic_row,"_" ,abbreviations[rr], ".rds"))
+
+
+#if(min_aic_row == "ma_optim"){
+  fitted_components <- plotHHH4_fitted_groups(get(ma_optim),
+                                            groups = factor(sub("^[^_]+_(.*)", "\\1", 
+                                                                stratum(ny_data_all)), 
+                                                            levels = AGE_GROUP),
+                                            col = c("#fdd0a2", "#756bb1", "grey","black"),
+                                            units = 1:5,
+                                            pch = 19, legend = 1,
+                                            pt.cex = 0.8,
+                                            total = F, # showing total cases
+                                            par.settings = list(cex.lab = 1.6, cex.axis = 1.6, cex.main = 1.8, mfrow = c(2,3)),
+                                            legend.args = list(
+                                              x = "topleft",       # Use "left" to position it on the left side topleft
+                                              y = "top",
+                                              cex = 1.6,
+                                              legend = c("from other age groups", "within age group", "endemic"),
+                                              adj = 0           # Align text to the left
+                                            ),
+                                            ylab = "# of Hospitalizations", 
+                                            xlab = "")
+  
+  
+# }else{
+#   fitted_components <- plotHHH4_fitted_groups( get(min_aic_row),
+#                                                groups = factor(sub("^[^_]+_(.*)", "\\1", 
+#                                                                    stratum(ny_data_all)), 
+#                                                                levels = AGE_GROUP),
+#                                                col = c("#fdd0a2", "#756bb1", "grey","black"),
+#                                                units = 1:5,
+#                                                pch = 19, legend = 1,
+#                                                pt.cex = 0.8,
+#                                                total = F, # showing total cases
+#                                                par.settings = list(cex.lab = 1.6, cex.axis = 1.6, cex.main = 1.8, mfrow = c(2,3)),
+#                                                legend.args = list(
+#                                                  x = "topleft",       # Use "left" to position it on the left side topleft
+#                                                  y = "top",
+#                                                  cex = 1.6,
+#                                                  legend = c("from other age groups", "within age group", "endemic"),
+#                                                  adj = 0           # Align text to the left
+#                                                ),
+#                                                ylab = "# of Hospitalizations", 
+#                                                xlab = "")
+#   power_lag[[rr]] <- test$power 
+# }
+
+g1_own[rr] <- round(colSums(fitted_components$`under 1`)[3] / sum(fitted_components$`under 1`[,1]),2)
+g2_own[rr] <- round(colSums(fitted_components$`1-4`)[3] / sum(fitted_components$`1-4`[,1]),2)
+g3_own[rr] <- round(colSums(fitted_components$`5-17`)[3] / sum(fitted_components$`5-17`[,1]),2)
+g4_own[rr] <- round(colSums(fitted_components$`18-64`)[3] / sum(fitted_components$`18-64`[,1]),2)
+g5_own[rr] <- round(colSums(fitted_components$`above 65`)[3] / sum(fitted_components$`above 65`[,1]),2)
+
+g1_other[rr] <- round(colSums(fitted_components$`under 1`)[4] / sum(fitted_components$`under 1`[,1]),2)
+g2_other[rr] <- round(colSums(fitted_components$`1-4`)[4] / sum(fitted_components$`1-4`[,1]),2)
+g3_other[rr] <- round(colSums(fitted_components$`5-17`)[4] / sum(fitted_components$`5-17`[,1]),2)
+g4_other[rr] <- round(colSums(fitted_components$`18-64`)[4] / sum(fitted_components$`18-64`[,1]),2)
+g5_other[rr] <- round(colSums(fitted_components$`above 65`)[4] / sum(fitted_components$`above 65`[,1]),2)
+
+g1_end[rr] <- round(colSums(fitted_components$`under 1`)[2] / sum(fitted_components$`under 1`[,1]),2)
+g2_end[rr] <- round(colSums(fitted_components$`1-4`)[2] / sum(fitted_components$`1-4`[,1]),2)
+g3_end[rr] <- round(colSums(fitted_components$`5-17`)[2] / sum(fitted_components$`5-17`[,1]),2)
+g4_end[rr] <- round(colSums(fitted_components$`18-64`)[2] / sum(fitted_components$`18-64`[,1]),2)
+g5_end[rr] <- round(colSums(fitted_components$`above 65`)[2] / sum(fitted_components$`above 65`[,1]),2)
+
+
+# 
+# plotHHH4_season_groups(get(ma_optim), 
+#                        component = "ne", 
+#                        seasonStart = 27 ,
+#                        conf.level = NULL,
+#                        col = c("#D53E4F", "#FEE08B", "#99D594", "#3288BD", "purple"),
+#                        xlab = "calendar week", ylab = "Epidemic effect", main = paste0(my_states[rr]),
+#                        xaxt = "n", xaxs = "i", yaxs = "i", ylim = c(0, 5), 
+#                        cex.lab = 1.5,            # Axis label size
+#                        cex.axis = 1.3,
+#                        legend.args = list("topright",
+#                                           cex = 1.3,
+#                                           legend = c("under 1", "1-4", "5-17", "18-64", "above 65"),
+#                                           col = c( "purple","#D53E4F", "#99D594","#FEE08B", "#3288BD")))
+# 
+# ## add x-axis
+# weeks2mark <- seq.int(27, 27+52, by = 5)  # axTicks(1)
+# axis(1, at = seq(0,100,2), labels = FALSE, tcl = NA)
+# axis(1, at = weeks2mark, labels = ifelse( (weeks2mark %% 52) == 0, 52, (weeks2mark %% 52) ), cex.axis = 1.3)
+
+
+
+}
+
+
+groups = factor(sub("^[^_]+_(.*)", "\\1", 
+                    stratum(ny_data_all)), 
+                levels = AGE_GROUP)
+
+group_all.df <- data.frame(epi_own = c(g1_own, g2_own, g3_own, g4_own, g5_own), 
+                           epi_other = c(g1_other, g2_other, g3_other, g4_other, g5_other), 
+                           State = rep(my_states, length.out = 12*5),
+                           age_group = rep(groups, each = 12))
+ 
+group_all.df %>%
+  group_by(age_group) %>%
+  summarise( 
+          lower_bd = 100*(mean(epi_own) - 2*sd(epi_own)),
+          average = 100*mean(epi_own),
+          ower_bd = 100*(mean(epi_own) + 2*sd(epi_own)))
+
+group_all.df %>%
+  group_by(age_group) %>%
+  summarise(
+    lower_bd = 100*(mean(epi_other) - 2*sd(epi_other)),
+    average = 100*mean(epi_other),
+    ower_bd = 100*(mean(epi_other) + 2*sd(epi_other)))
+
+
+palette_colors <- c("brown1", "black", "#009E73", "#4d9221", 
+                    "#0072B2", "#D55E00", "#CC79A7", "#999999", 
+                    "#F4A582", "#92C5DE", "#B2182B", "#8073ac")
+
+palette_colors2 <- c("#b15928", "black", "#fccde5", "#92C5DE")
+                    
+group_all.df %>% 
+  mutate(Region = ifelse(State %in% c("New York", "Connecticut", "Maryland"), "Northeast Region (NY, CT, MD)", 
+                         ifelse(State %in% c("Georgia", "Tennessee"), "Southeast Region (GA, TN)", 
+                                ifelse(State %in% c("Minnesota", "Michigan"), "Midwest Region (MN, MI)", "Southwest/West Region (NM, CO, UT, CA, OR)")))) %>% 
+  mutate(Region = factor(Region, levels = c("Southeast Region (GA, TN)", 
+                                            "Northeast Region (NY, CT, MD)", 
+                                            "Midwest Region (MN, MI)", 
+                                            "Southwest/West Region (NM, CO, UT, CA, OR)")))  %>% 
+  ggplot() + 
+  geom_point(aes(x = epi_own * 100, y = epi_other * 100, color = State), size = 10, shape = 42) + 
+  scale_shape_manual(values = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)) +
+  theme_bw() + 
+  ylim(0,100) + 
+  xlim(0,100) +
+  geom_vline(aes(xintercept = 50), linewidth = .4, color = "black", lty = "dashed") +
+  geom_hline(aes(yintercept = 50), linewidth = .4, color = "black", lty = "dashed") +
+  theme_bw() +
+  theme(legend.key = element_rect(fill = "white", colour = "white"), legend.position = "right") +
+  theme(#axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)) + 
+  theme(panel.grid.minor  = element_blank()) +
+  labs(title = "",
+       x = "Proportion of within-group transmissions (%)",
+       y = "Proportion of between-group transmissions (%)", 
+       color = "States") +
+  guides(fill = "right") +
+  theme(axis.text.x = element_text(color="black",
+                                   size=15, angle=0,vjust = 0.5),
+        axis.text.y = element_text(color="black",
+                                   size=15, angle=0),
+        text = element_text(size = 15), 
+        legend.title = element_text(size = 15),  # Change legend title size
+        legend.text = element_text(size = 15))  +
+  theme(strip.text = element_text(size = 15))+  # Adjust the size as needed
+  facet_wrap(~age_group, scales = "free")  + 
+  scale_color_manual(values = palette_colors) 
+
+temp_list <- list()
+
+for(i in 1:5){
+  vec_names <- paste0("g",i,"_own")
+  vec_values <- get(vec_names)
+  temp_list[[i]] <- round(c(mean(vec_values) - 2*sd(vec_values), 
+                      mean(vec_values),
+                      mean(vec_values) + 2*sd(vec_values)) * 100,1)
+}
+
+
+temp_df <- data.frame(x1 = g2_own, 
+                      x2 = g5_other, 
+                      State = rep(my_states, length.out = 12))
+                      
+temp_df %>% 
+  ggplot() +
+  geom_point(aes(x = x1 * 100, y = x2 * 100, color = State), size = 20, shape = 42) + 
+  scale_shape_manual(values = c(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)) +
+  theme_bw() + 
+  ylim(0,100) + 
+  xlim(0,100) +
+  geom_vline(aes(xintercept = 50), linewidth = .2, color = "black", lty = "dashed") +
+  geom_hline(aes(yintercept = 50), linewidth = .2, color = "black", lty = "dashed") +
+  geom_abline(aes(intercept = 0, slope = 1), linewidth = 0.4, color = "black")+
+  theme_bw() +
+  theme(legend.key = element_rect(fill = "white", colour = "white"), legend.position = "right") +
+  theme(#axis.line = element_line(colour = "black"), 
+    panel.border = element_rect(colour = "black", fill = NA, linewidth = 1)) + 
+  theme(panel.grid.minor  = element_blank()) +
+  labs(title = "",
+       x = "% within-group transmission (1-4 years)",
+       y = "% between-group transmission (65+ years)", 
+       color = "States") +
+  guides(fill = "right") +
+  theme(axis.text.x = element_text(color="black",
+                                   size=15, angle=0,vjust = 0.5),
+        axis.text.y = element_text(color="black",
+                                   size=15, angle=0),
+        text = element_text(size = 15), 
+        legend.title = element_text(size = 15),  # Change legend title size
+        legend.text = element_text(size = 15))  +
+  scale_color_manual(values = palette_colors) +
+  coord_fixed()
+
+
+household_size <- c(3.04,2.5,2.46,2.55,2.55,2.46,2.45,2.6,2.65,2.48,2.48,2.89)
+
+
+  
+ChildsHome <- rev(c(0,0,20,0,1,6,0,1,11,9,0,1))
+FamilyHome <- rev(c(36,8,23,3,28,20,15,9,12,34,4,31))
+GroupHome <- rev(c(16,0,1,0,0,14,0,5,34,21,5,0))
+Center <- rev(c(46,69,56,82,71,60,84,84,43,35,91,68))
+
+Center <- rev(c(31, 86, 52, 82, 74, 57, 78, 84, 34, 34, 92, 66) / 100)
+
+Center <- rev(c(64281.6687, 14747.00313, 5877.876525, 40725.8286, 18415.17685,
+                29329.19797, 17742.26961, 10773.75464, 15774.95686, 9433.481766,
+                17042.03246, 5367.855105))
+
+ChildsHome <- rev(c(702.9745053, 81.79479551, 2667.39777, 8.005415926, 199.5286644,
+                    2114.931576, 29.01249149, 0, 7562.791114, 1112.798282, 0, 118.2336067))
+FamilyHome <- rev(c(82419.01092, 1424.426439, 2424.361528, 1460.988407, 4818.617246,
+                    6720.782563, 3030.304715, 956.0617274, 8766.598689, 4089.608808,
+                    1371.775026, 4014.93273))
+GroupHome <- rev(c(43748.41338, 0, 73.01088759, 0, 0, 4841.843352, 0, 701.1119334,
+                   27040.67764, 2895.679418, 1776.298465, 0))
+Center <- rev(c(72069.38627, 14749.99563, 6229.929025, 38852.28484, 14538.65613,
+                20204.34633, 18473.95406, 9114.455134, 34584.47179, 4376.071732,
+                34930.19839, 8261.322775))
+
+ 
+
+ 
+day_care_cor <- data.frame(g1_own = g1_own, 
+                           g2_own = g2_own,
+                           ChildsHome = ChildsHome,
+                           FamilyHome = FamilyHome,
+                           GroupHome = GroupHome,
+                           Center = Center)
+
+
+model <- lm(g1_own ~ Center + ChildsHome + FamilyHome + GroupHome, data = day_care_cor)
+
+# Summarize the model
+summary(model)                           
+
+
+
+
+geometric_lag <-  geometric_lag(par_lag = 1.5, min_lag = 1, max_lag = 1)
+contrl3 <- list(
+  end = list(f = FGRXgS,
+             offset = log(reporting_fraction * population(ny_data_all))),
+  
+  ne = list(
+    f = FGRpop,
+    offset = log(reporting_fraction * population(ny_data_all)),
+    weights = neighbourhood(ny_data_all),
+    scale =   Cgrouped/rowSums(Cgrouped),
+    normalize = TRUE),
+  funct_lag = geometric_lag,
+  family = "NegBin1",  # share overdispersion parameters
+  data = c(MMG, DATAt, MMgS, MMR),
+  optimizer = list(stop = list(tol=1e-8, niter=10000),
+                   regression = list(method="nlminb"),
+                   variance = list(method="nlminb")))
+
+ma3 <- profile_par_lag(ny_data_all, contrl3)
+
+AIC(ma0, ma1, ma2, ma3)
+
+
+
+
+para_fitted <- plot(ma3, type = "fitted", total = F, hide0s = T, par.settings = NULL,
+                    legend = FALSE, units= 1:5)
+
+
+par(mfrow = c(2, 3), mar = c(5, 5, 4, 2))  # Adjust margins as needed
+ 
+
+
+fitted_components <- plotHHH4_fitted_groups(ma2,
+                                      groups = factor(sub("^[^_]+_(.*)", "\\1", 
+                                                          stratum(ny_data_all)), 
+                                                      levels = AGE_GROUP),
+                                      col = c("#fdd0a2", "#756bb1", "grey","black"),
+                                      units = 1:5,
+                                      pch = 19, legend = 1,
+                                      pt.cex = 0.8,
+                                      total = F, # showing total cases
+                                      par.settings = list(cex.lab = 1.6, cex.axis = 1.6, cex.main = 1.8, mfrow = c(2,3)),
+                                      legend.args = list(
+                                        x = "topleft",       # Use "left" to position it on the left side topleft
+                                        y = "top",
+                                        cex = 1.6,
+                                        legend = c("from other age groups", "within age group", "endemic"),
+                                        adj = 0           # Align text to the left
+                                      ),
+                                      ylab = "# of Hospitalizations", 
+                                      xlab = "")
+
+ 
+
+  
+
+ # Assuming 'fit' is your hhh4 model
+ summary_fit <- summary(ma2, idx2Exp = TRUE, amplitudeShift = TRUE, 
+                        maxEV = TRUE, reparamPsi = TRUE) 
+ 
+ # Extract the coefficients and standard errors
+ coefficients <- summary_fit$fixef
+ 
+ # Convert to a data frame for better formatting
+ coefficients_df <- data.frame(
+   #Coefficients = rownames(coefficients),
+   Estimate = coefficients[, 1],
+   Std.Error = coefficients[, 2]
+ )
+ 
+ # Print the table
+ print(coefficients_df)
+
+xtable(coefficients_df)
+
+round(colSums(fitted_components$`under 1`)[3:4] / sum(fitted_components$`under 1`[,1]),2)
+round(colSums(fitted_components$`1-4`)[3:4] / sum(fitted_components$`1-4`[,1]),2)
+round(colSums(fitted_components$`5-17`)[3:4] / sum(fitted_components$`5-17`[,1]),2)
+round(colSums(fitted_components$`18-64`)[3:4] / sum(fitted_components$`18-64`[,1]),2)
+round(colSums(fitted_components$`above 65`)[3:4] / sum(fitted_components$`above 65`[,1]),2)
+
+
+
+
+
+
+
+# # helper function to compute Pearson residuals:
+# pearson_residuals <- function(hhh4Obj){
+#   # compute raw residuals:
+#   response_residuals <- residuals(hhh4Obj, type = "response")
+#   # compute standard deviations:
+#   if(class(hhh4Obj) == "hhh4lag"){
+#     sds <- sqrt(fitted(hhh4Obj) +
+#                   fitted(hhh4Obj)^2/hhh4addon:::psi2size.hhh4lag(hhh4Obj))
+#   }else{
+#     sds <- sqrt(fitted(hhh4Obj) +
+#                   fitted(hhh4Obj)^2/surveillance:::psi2size.hhh4(hhh4Obj))
+#   }
+#   # compute Pearson residuals:
+#   pearson_residuals <- response_residuals/sds
+#   return(pearson_residuals)
+# }
+# 
+# pr1 <- pearson_residuals(ma2)
+# # compute district-wise means and standard deviations:
+# colMeans(pr1)
+# apply(pr1, 2, sd)
+
+
+pop_density <- c(16.3, 16.2, 19.1,15.5,17.3, 19.2, 17.6,20.4,18.6,19.7,17.6,12.2)
+
+
+
+par(mfrow = c(2,3)) 
+
+
+palette_colors <- c("#2ca25f", "#fec44f", "#fa9fb5", "#8da0cb","midnightblue")
+
+ plotHHH4_season_groups(ma3, 
+                       component = "ne", 
+                       seasonStart = 27 ,
+                       conf.level = NULL,
+                       col = c("#D53E4F", "#FEE08B", "#99D594", "#3288BD", "purple"),
+                       xlab = "calendar week", ylab = "Epidemic effect", main = paste0(my_states[rr]),
+                       xaxt = "n", xaxs = "i", yaxs = "i", ylim = c(0, 3), 
+                       cex.lab = 1.5,            # Axis label size
+                       cex.axis = 1.3,
+                       legend.args = list("topright",
+                                          cex = 1.3,
+                                          legend = c("under 1", "1-4", "5-17", "18-64", "above 65"),
+                                          col = c( "purple","#D53E4F", "#99D594","#FEE08B", "#3288BD")))
+
+
+
+## add x-axis
+weeks2mark <- seq.int(27, 27+52, by = 5)  # axTicks(1)
+axis(1, at = seq(0,100,2), labels = FALSE, tcl = NA)
+axis(1, at = weeks2mark, labels = ifelse( (weeks2mark %% 52) == 0, 52, (weeks2mark %% 52) ), cex.axis = 1.3)
+
+
+
+
+## the multiplicative effect refers to how the seasonal component of the model 
+## influences the time-varying autoregressive structure (i.e., new infections at time t)
+## The multiplicative effect is computed as the ratio between the
+## time-varying neighborhood (age group) effect (accounting for seasonality) 
+## and the baseline effect. In essence, it shows how much the age group influence 
+## is scaled up or down at each time point (calendar week).
+## If the seasonal component amplifies the risk, the multiplicative effect will be greater than 1, 
+## if it reduces the risk, the effect will be less than 1.
+## The multiplicative effect of seasonality increases as school season begins 
+## and starts to decrease towards the start of the winter.
+# $exp(intercept + seasonality)$
+
+
+
+
+ 
