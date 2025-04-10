@@ -1,0 +1,227 @@
+library(tidyr)
+library(ggpubr)
+library(tidyverse)
+data <- readRDS("cdc_data_new_age_group_group5.rds")
+
+
+  # data %>% 
+  # filter(State == "California" & Season == "2018-2019") %>% 
+  # ggplot() + 
+  # geom_line(aes(x = Date, y = N)) +
+  # facet_wrap(~AGE_GROUP) 
+  
+
+central_gravity <- data %>% 
+  filter(Season != "2020-2021") %>% 
+  filter(State != "RSV-NET") %>% 
+  filter(State != "North Carolina") %>% 
+  group_by(State, Season, AGE_GROUP) %>% 
+  summarise(central_gravity = sum(wk * N/sum(N)))
+
+central_gravity_selected <- central_gravity #%>% 
+  #filter(AGE_GROUP %in% c("<1 year","1-4 years", "65+ years"))
+
+
+ 
+CG_wide <- pivot_wider(central_gravity_selected, 
+                      names_from = AGE_GROUP, 
+                      values_from = central_gravity)
+
+
+
+# Define a distinct and advanced color palette
+palette_colors <- c("brown1", "black", "#009E73", "#fdbf6f", 
+                    "#0072B2", "#D55E00", "#CC79A7", "#999999", 
+                    "#F4A582", "#92C5DE", "#B2182B", "#8073ac")
+
+
+
+# Assuming CG_wide is your data in wide format
+ 
+
+p1 <- CG_wide %>%
+  ggplot() +
+  geom_point(aes(x = `under 1`, y = `1-4`, color = State), size = 10, shape = 42) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +  
+  labs(x = "Center of gravity (<1 year)", y = "Center of gravity (1-4 years)") +       
+  theme_bw() +
+  ylim(c(10,35)) + 
+  xlim(c(10,35)) +
+  facet_wrap(~Season, ncol = 5) + 
+  theme(
+    legend.position = "none",
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 15),
+    axis.title = element_text(size = 15),  # Axis label size
+    axis.text = element_text(size = 15)    # Tick size
+  )+ 
+  theme(strip.text = element_text(size = 15)) +
+  scale_color_manual(values = palette_colors) + 
+  coord_fixed()
+
+p2 <- CG_wide %>%
+  ggplot() +
+  geom_point(aes(x = `under 1`, y = `above 65`, color = State), size = 10, shape = 42) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +  
+  labs(x = "Center of gravity (<1 year)", y = "Center of gravity (65+ years)") +       
+  theme_bw() +
+  ylim(c(10,35)) + 
+  xlim(c(10,35)) +
+  facet_wrap(~Season, ncol = 5) + 
+  theme(
+    legend.position = "right",
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 15),
+    axis.title = element_text(size = 15),  # Axis label size
+    axis.text = element_text(size = 15)    # Tick size
+  )+ 
+  theme(strip.text = element_text(size = 15)) +
+  scale_color_manual(values = palette_colors) + 
+  coord_fixed()
+
+
+ 
+p3 <- CG_wide %>%
+  ggplot() +
+  geom_point(aes(x = `5-17`, y = `above 65`, color = State), size = 10, shape = 42) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +  
+  labs(x = "Center of gravity (5-17 years)", y = "Center of gravity (65+ years)") +       
+  theme_bw() +
+  ylim(c(10,35)) + 
+  xlim(c(10,35)) +
+  facet_wrap(~Season, ncol = 5) + 
+  theme(
+    legend.position = "none",
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 15),
+    axis.title = element_text(size = 15),  # Axis label size
+    axis.text = element_text(size = 15)    # Tick size
+  )+ 
+  theme(strip.text = element_text(size = 14)) +
+  scale_color_manual(values = palette_colors) + 
+  coord_fixed()
+
+p4 <- CG_wide %>%
+  ggplot() +
+  geom_point(aes(x = `18-64`, y = `above 65`, color = State), size = 10, shape = 42) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +  
+  labs(x = "18-64 years center of gravity", y = "65+ years center of gravity") +       
+  theme_bw() +
+  ylim(c(10,35)) + 
+  xlim(c(10,35)) +
+  facet_wrap(~Season, ncol = 5) + 
+  theme(
+    legend.position = "none",
+    legend.text = element_text(size = 15),
+    legend.title = element_text(size = 15),
+    axis.title = element_text(size = 15),  # Axis label size
+    axis.text = element_text(size = 15)    # Tick size
+  )+ 
+  theme(strip.text = element_text(size = 14)) +
+  scale_color_manual(values = palette_colors) + 
+  coord_fixed()
+
+Figure <- ggarrange(p1,p2,p3,
+                     nrow = 3,
+                     font.label = list(size = 15, color = "black"),
+                     align = "v")
+Figure
+
+
+library(cowplot)
+
+
+
+S3<- CG_wide %>%
+  ggplot() +
+  geom_point(aes(x = `1-4`, y = `5-17`, color = State), size = 10, shape = 42) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +  
+  labs(x = "Center of gravity (1-4 years)", y = "Center of gravity (5-17 years)") +       
+  theme_bw() +
+  ylim(c(10,35)) + 
+  xlim(c(10,35)) +
+  facet_wrap(~Season, ncol = 5) + 
+  theme(
+    legend.position = "none",
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    axis.title = element_text(size = 12),  # Axis label size
+    axis.text = element_text(size = 12)    # Tick size
+  )+ 
+  scale_color_manual(values = palette_colors) + 
+  coord_fixed()
+
+
+
+
+S4<- CG_wide %>%
+  ggplot() +
+  geom_point(aes(x = `under 1`, y = `5-17`, color = State), size = 10, shape = 42) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +  
+  labs(x = "Center of gravity (< 1 year)", y = "Center of gravity (5-17 years)") +       
+  theme_bw() +
+  ylim(c(10,35)) + 
+  xlim(c(10,35)) +
+  facet_wrap(~Season, ncol = 5) + 
+  theme(
+    legend.position = "none",
+    legend.text = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    axis.title = element_text(size = 12),  # Axis label size
+    axis.text = element_text(size = 12)    # Tick size
+  )+ 
+  scale_color_manual(values = palette_colors) + 
+  coord_fixed()
+
+SFigure <- ggarrange(S4,S3,
+                    nrow = 2,
+                    font.label = list(size = 15, color = "black"),
+                    align = "none")
+SFigure
+
+
+
+
+df1 <- CG_wide %>% 
+  mutate(diff = `above 65` - `1-4`) %>% 
+  filter(State == "Connecticut")
+  #filter(Season == "2018-2019")
+
+
+
+
+df2 <- CG_wide %>% 
+  mutate(diff = `above 65` - `1-4`) %>% 
+  filter(Season == "2019-2020")
+
+ 
+
+df3 <- CG_wide %>% 
+  mutate(diff = `above 65` - `1-4`) %>% 
+  filter(Season == "2021-2022")
+
+
+df4 <- CG_wide %>% 
+  mutate(diff = `above 65` - `1-4`) %>% 
+  filter(Season == "2022-2023")
+
+df5 <- CG_wide %>% 
+  mutate(diff = `above 65` - `1-4`) %>% 
+  filter(Season == "2023-2024")
+
+
+df <- CG_wide %>% 
+  mutate(diff = `above 65`[1:59] - `1-4`[2:60])  
+  ggplot() + 
+  geom_point(aes(x = `under 1`[2:60], y = `above 65`[1:59]))
+  
+  
+# # Create lagged version of y, removing the first element to align with x(t)
+# x <- CG_wide$`under 1`
+# y <- CG_wide$`above 65`
+# y_lagged <- c(NA, y[-length(y)])  # shift y by one time step
+# x_lagged <- c(NA, x[-length(x)])
+# # Calculate correlation, omitting NA values from the lagged y series
+# correlation <- cor(x_lagged, y, use = "complete.obs")
+#   
+ 
