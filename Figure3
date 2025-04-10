@@ -1,0 +1,316 @@
+library(EpiEstim)
+library(tidycensus)
+library(dplyr)
+library(tidyverse)
+
+setwd("/Volumes/Macintosh HD/Users/ke/Desktop/OneDrive - Yale University/Postdoc/spatialtemporal RSV/RSV_peaking_time_age/")
+
+
+data <- readRDS("cdc_data_new_age_group_group5.rds") %>% 
+  filter(Season != "2020-2021")#(State, wk, Season, N, AGE_GROUP, population)
+
+data <- data %>% filter(State != "North Carolina")
+Nstate <- length(unique(data$State))
+Nseason <- length(unique(data$Season))
+Nagegroup <- length(unique(data$AGE_GROUP))
+
+state <- sort(unique(data$State))
+season <- unique(data$Season)
+agegroup <- unique(data$AGE_GROUP)
+
+
+state.list <- list()
+for(i in 1:Nstate){
+  state.list[[i]] = data %>% filter(State == state[i]) 
+}
+names(state.list) <- state
+
+
+extract_season <- function(df){
+  season.list <- list()
+  
+  for(i in 1:Nseason){
+    
+    df1 <- df %>% 
+      filter(Season == season[i]) %>% 
+      group_by(AGE_GROUP, wk) %>% 
+      summarise(N = sum(N)) %>% 
+      ungroup() 
+    
+    wide_data <- pivot_wider(df1, 
+                             names_from = wk, 
+                             values_from = N, 
+                             names_prefix = "wk_")
+    wide_matrix <- as.matrix(wide_data[, -1])  # Exclude the first column (AGE_GROUP)
+    colnames(wide_matrix) <- NULL  # Remove column names
+    
+    season.list[[i]] = wide_matrix
+  }
+  names(season.list) <- season
+  season.list <<- season.list
+}
+
+
+
+intropolate_fn <- function(input_data_vector){
+  
+  rsv_data <- matrix(input_data_vector, nrow = 52, ncol = 5)
+  # Initialize a matrix for daily data (365 days, 5 seasons)
+  daily_data <- matrix(NA, nrow = 365, ncol = 5)
+  
+  # Create a vector for the days of the year corresponding to each week
+  days_of_year <- seq(1, 365, length.out = 52)
+  
+  # Interpolate data for each season
+  for (season in 1:6) {
+    daily_data[, season] <- approx(days_of_year, rsv_data[, season], xout = 1:365)$y
+  }
+  
+  return(round(as.vector(daily_data)))
+  
+  # daily_data <- as.vector(daily_data)
+  # 
+  # 
+  # daily_date <- seq(from = min(input_data_vector$dates), 
+  #                   to =  max(input_data_vector$dates), length.out = 1825)
+  # 
+  # 
+  # df <- data.frame(dates = daily_date, I = daily_data)
+  # return(df)
+}
+ 
+intropolate_fn2 <-  function(weekly_data){
+  
+  # Create a sequence representing the weekly time points for 260 data points
+  weekly_time <- seq(1, 52 * 5, by = 1)  # Weekly time points (1 to 260)
+  
+  # Smoothing the data using LOESS
+  smoothed_data <- loess(weekly_data ~ weekly_time, span = 0.2)$fitted
+  
+  # Now, extrapolate to daily data by interpolation
+  # We want 365 days * 5 seasons = 1825 days, which means daily time points
+  daily_time <- seq(1, 52 * 5, length.out = 365 * 5)  # 1825 daily points
+  
+  # Interpolate the daily data using the smoothed weekly data
+  daily_data <- approx(x = weekly_time, y = smoothed_data, xout = daily_time)$y
+  
+  # Ensure no negative values (replace any negative values with zero)
+  daily_data[daily_data < 0] <- 0
+  
+  # Convert to integers by rounding to the nearest integer
+  #daily_data <- round(daily_data)
+  
+  return(daily_data)
+  
+}
+
+intropolate_fn3 <- function(weekly_data){
+  
+  # Generate daily time points (1:52 for weeks, 1:365 for days)
+  weekly_time <- seq(1, 52 * 5, by = 1)
+  daily_time <- seq(1, 52 * 5, length.out = 365 * 5) 
+  
+  # Linear interpolation
+  daily_incidence <- round(approx(x = weekly_time, y = weekly_data, xout = daily_time)$y)
+  return(daily_incidence)
+  
+}
+
+
+ 
+ 
+{
+# Set seed for reproducibility
+set.seed(1243)
+
+# Parameters for the Gamma distribution
+mean_si <- 7.5
+sd_si <- 2.1
+
+# Calculate the shape and rate parameters for the Gamma distribution
+shape_si <- (mean_si / sd_si) ^ 2
+rate_si <- mean_si / (sd_si ^ 2)
+
+# Number of samples
+n <- 1e+5
+
+# Generate continuous Gamma distribution samples
+continuous_si <- rgamma(n, shape_si,  rate_si)
+
+# Convert to discrete by rounding and ensure non-negative values
+discrete_si <- round(continuous_si)
+discrete_si[discrete_si < 0] <- 0  # Set any negative intervals to zero (if any)
+
+# Create the probability density function by calculating relative frequencies
+si_table <- table(discrete_si)
+pdf_si <- si_table / sum(si_table)
+
+si_dist <- c(0,0, as.numeric(pdf_si))
+}
+
+
+w <- 250
+t_start <- seq(60, 1825 - w)    #5 260,
+t_end <- t_start + w
+
+
+Reff <- list()
+
+for(i in 1:Nstate){
+  
+  my_data <- state.list[[i]] %>% group_by(AGE_GROUP,Date) %>% summarise(N = sum(N)) %>% ungroup()
+  
+  Y_older <- my_data %>% filter(AGE_GROUP == "above 65") %>% select(N) %>% as.matrix() %>% as.vector()
+  Y_teen <- my_data %>% filter(AGE_GROUP == "5-17") %>% select(N) %>% as.matrix() %>% as.vector()
+  Y_adult <- my_data %>% filter(AGE_GROUP == "18-64") %>% select(N) %>% as.matrix() %>% as.vector()
+  Y_younger <- my_data %>% filter(AGE_GROUP == "1-4") %>% select(N) %>% as.matrix() %>% as.vector()
+  Y_infant <- my_data %>% filter(AGE_GROUP == "under 1") %>% select(N) %>% as.matrix() %>% as.vector()
+ 
+  res_R_Yolder <- estimate_R(incid = intropolate_fn3(Y_older),
+                             method = "non_parametric_si",
+                             config = make_config(list(
+                               si_distr = si_dist,
+                               t_start = t_start, t_end = t_end)))
+  
+  res_R_Yteen <- estimate_R(incid = intropolate_fn3(Y_teen),
+                             method = "non_parametric_si",
+                             config = make_config(list(
+                               si_distr = si_dist,
+                               t_start = t_start, t_end = t_end)))
+  
+                             
+  res_R_Yadult <- estimate_R(incid = intropolate_fn3(Y_adult),
+                             method = "non_parametric_si",
+                             config = make_config(list(
+                               si_distr = si_dist,
+                               t_start = t_start, t_end = t_end)))
+
+  
+  
+  res_R_Yyounger <- estimate_R(incid = intropolate_fn3(Y_younger),
+                               method = "non_parametric_si",
+                               config = make_config(list(
+                                 si_distr = si_dist,
+                                 t_start = t_start, t_end = t_end)))
+  
+  
+  res_R_Yinfant <- estimate_R(incid = intropolate_fn3(Y_infant),
+                               method = "non_parametric_si",
+                               config = make_config(list(
+                                 si_distr = si_dist,
+                                 t_start = t_start, t_end = t_end)))
+  
+  
+  
+  temp_df <- data.frame(Reff = c(res_R_Yolder$R$`Mean(R)`, 
+                                 res_R_Yteen$R$`Mean(R)`, 
+                                 res_R_Yadult$R$`Mean(R)`, 
+                                 res_R_Yyounger$R$`Mean(R)`,
+                                 res_R_Yinfant$R$`Mean(R)`), 
+                        
+                        std = c(res_R_Yolder$R$`Std(R)`, 
+                                res_R_Yteen$R$`Std(R)`, 
+                                res_R_Yadult$R$`Std(R)`, 
+                                res_R_Yyounger$R$`Std(R)`,
+                                res_R_Yinfant$R$`Std(R)`), 
+                        
+                        AGE_GROUP = rep(c("65+ years", "5-17 years", "18-64 years",
+                                          "1-4 years", "<1 year"), each = length(res_R_Yolder$R$`Mean(R)`)))
+                      
+  
+  Reff[[i]] <- temp_df
+  
+}
+
+names(Reff) <- state
+
+
+
+pooled_results_CA <- bind_rows(Reff[[1]])
+pooled_results_CO <- bind_rows(Reff[[2]])
+pooled_results_CT <- bind_rows(Reff[[3]])
+pooled_results_GA <- bind_rows(Reff[[4]])
+pooled_results_MD <- bind_rows(Reff[[5]])
+pooled_results_MI <- bind_rows(Reff[[6]])
+pooled_results_MN <- bind_rows(Reff[[7]])
+pooled_results_NM <- bind_rows(Reff[[8]])
+pooled_results_NY <- bind_rows(Reff[[9]])
+pooled_results_OR <- bind_rows(Reff[[10]])
+pooled_results_TN <- bind_rows(Reff[[11]])
+pooled_results_UT <- bind_rows(Reff[[12]])
+
+
+pooled_results <- bind_rows(pooled_results_CA, 
+                            pooled_results_CO,
+                            pooled_results_CT,
+                            pooled_results_GA,
+                            pooled_results_MD,
+                            pooled_results_MI,
+                            pooled_results_MN,
+                            pooled_results_NM,
+                            pooled_results_NY,
+                            pooled_results_OR,
+                            pooled_results_TN,
+                            pooled_results_UT)
+
+
+pooled_results <- pooled_results %>% 
+  mutate(State = rep(state, each = dim(pooled_results_NY)[1])) %>% 
+  mutate(Date = rep(rep(1:length(res_R_Yolder$R$`Mean(R)`), length.out = dim(pooled_results_NY)[1]),12))
+
+#palette_colors <- c("#2ca25f", "#fec44f", "#fa9fb5", "#8da0cb","midnightblue")
+palette_colors <- c("#2ca25f", "#fec44f","midnightblue","#fc8d59", "#91bfdb")
+
+pandemic_seaosn <- data.frame(Reff = rep(rep(rep(1, length.out = length(418:782)), 5),12),
+                              std = rep(rep(rep(0, length.out = length(418:782)), 5),12),
+                              AGE_GROUP = rep(rep(unique(pooled_results$AGE_GROUP), each = length(418:782)),12),
+                              State = rep(rep(unique(pooled_results$State), each = length(418:782)),5),
+                              Date = rep(rep(418:782, 5), 12))
+
+Reff_plot <- 
+  pooled_results %>% 
+  mutate(Date = ifelse(Date <= 417, Date, Date + 365)) %>% 
+  rbind(pandemic_seaosn) %>% 
+  mutate(AGE_GROUP = factor(AGE_GROUP, levels = c("<1 year", "1-4 years", "5-17 years", "18-64 years", "65+ years"))) %>% 
+  filter(AGE_GROUP %in% c("<1 year", "1-4 years", "18-64 years","65+ years")) %>% 
+  filter(State %in% c("New York", "Georgia", "Minnesota", "California")) %>% 
+  ggplot() + 
+  geom_line(aes(x = Date, y = Reff, group = AGE_GROUP, color = AGE_GROUP), linewidth = 1) + 
+  geom_ribbon(aes(x = Date, ymin = Reff - 2*std, ymax = Reff + 2*std, fill = AGE_GROUP, group = AGE_GROUP), alpha = 0.25) +
+  geom_vline(aes(xintercept = 235), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = 607), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = 972), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = 1337), linewidth = .4, color = "black", lty = "dashed") +
+  geom_vline(aes(xintercept = 1702), linewidth = .4, color = "black", lty = "dashed") +
+  theme_minimal() +
+  geom_hline(aes(yintercept = 1), linewidth = 1, color = "black", lty = "dashed") +
+  theme(legend.key = element_rect(fill = "white", colour = "white"), legend.position = "top") +
+  theme(panel.border = element_blank(), axis.line = element_line(colour = "black")) + 
+  theme(panel.grid.minor  = element_blank()) +
+  labs(title = "",
+       x = "Year",
+       y = "Effective reproduction number", 
+       color = "Age group") +
+  guides(fill = "none") +
+  theme(axis.text.x = element_text(color="black",
+                                   size=15, angle=0,vjust = 0.5),
+        axis.text.y = element_text(color="black",
+                                   size=15, angle=0),
+        text = element_text(size = 15), 
+        legend.title = element_text(size = 15),  # Change legend title size
+        legend.text = element_text(size = 15))  +
+  theme(strip.text = element_text(size = 15)) + # Adjust the size as needed
+  theme(plot.title = element_text(hjust = 0.5))  + 
+  facet_wrap(~State, nrow = 2, ncol = 2, scales = "free") + 
+  #facet_wrap(~State, nrow = 3, ncol = 4, scales = "free") + 
+  scale_color_manual(values = palette_colors)  + 
+  scale_fill_manual(values = palette_colors)   + 
+  ylim(0,2) +
+  scale_x_continuous(breaks = c(0, 235, 607, 972, 1337, 1702),
+                   labels = c("","2020", "2021", "2022", "2023", "2024"))  
+
+Reff_plot
+#daily_dates <- as.Date(readRDS("daily_dates.rds"))
+ 
+         
+
